@@ -59,11 +59,14 @@ def institution_lock_exceeds(cap: int, same_inst_locked: int, is_new_lock: bool)
     return same_inst_locked + 1 > cap
 
 
-def solve(conn: sqlite3.Connection) -> dict:
-    beta = int(get_setting(conn, "mismatch_weight"))   # 主题不匹配权重
-    alpha = int(get_setting(conn, "load_weight"))      # 负载偏差权重
-    org_cap = int(get_setting(conn, "institution_cap"))  # 每稿同机构最多人数（0=关闭）
+def compute_solution(conn: sqlite3.Connection, beta: int, alpha: int, org_cap: int,
+                     ) -> tuple[dict, list[tuple[int, int]], list[tuple[int, int]]]:
+    """纯计算一次两阶段求解：只读数据库，不写入任何表。
 
+    beta：主题不匹配权重；alpha：负载偏差权重；org_cap：每稿同机构最多人数（0=关闭）。
+    返回 (solution, lead_pairs, free_pairs)，由调用方决定如何落库
+    （一键求解见 solve()；方案沙盒预览/采用见 app/sandbox.py）。
+    """
     manuscripts = [dict(r) for r in _rows(
         conn, "SELECT * FROM manuscripts ORDER BY id")]
     reviewers = [dict(r) for r in _rows(
@@ -379,15 +382,6 @@ def solve(conn: sqlite3.Connection) -> dict:
         free_candidates, remaining_need, slot_base2, remaining_capacity, inst_pre_used2)
     note_edge_costs(free_pairs, free_slots, slot_base2)
 
-    # 事务内用新结果替换所有非锁定分配
-    with transaction(conn):
-        conn.execute("DELETE FROM assignments WHERE locked = 0")
-        for m_id, r_id in lead_pairs + free_pairs:
-            conn.execute(
-                "INSERT INTO assignments(m_id, r_id, locked) VALUES (?, ?, 0)",
-                (m_id, r_id),
-            )
-
     # --------------------------------------------------------- 未满足稿件分析
     assigned_by_m: dict[int, int] = {}
     for m_id, _ in valid_locks:
@@ -628,7 +622,28 @@ def solve(conn: sqlite3.Connection) -> dict:
         "edge_costs": edge_costs,
         "institutions": composition,
     }
+    return solution, lead_pairs, free_pairs
 
+
+def write_solution(conn: sqlite3.Connection, solution: dict,
+                   lead_pairs: list[tuple[int, int]],
+                   free_pairs: list[tuple[int, int]]) -> None:
+    """把求解结果落库（不提交事务，由调用方管理）：替换全部非锁定分配并记录 last_solution。"""
+    conn.execute("DELETE FROM assignments WHERE locked = 0")
+    for m_id, r_id in lead_pairs + free_pairs:
+        conn.execute(
+            "INSERT INTO assignments(m_id, r_id, locked) VALUES (?, ?, 0)",
+            (m_id, r_id),
+        )
     set_setting(conn, "last_solution", solution)
-    conn.commit()
+
+
+def solve(conn: sqlite3.Connection) -> dict:
+    """一键求解：按当前设置中的参数计算并在单个事务内落库。"""
+    beta = int(get_setting(conn, "mismatch_weight"))   # 主题不匹配权重
+    alpha = int(get_setting(conn, "load_weight"))      # 负载偏差权重
+    org_cap = int(get_setting(conn, "institution_cap"))  # 每稿同机构最多人数（0=关闭）
+    solution, lead_pairs, free_pairs = compute_solution(conn, beta, alpha, org_cap)
+    with transaction(conn):
+        write_solution(conn, solution, lead_pairs, free_pairs)
     return solution

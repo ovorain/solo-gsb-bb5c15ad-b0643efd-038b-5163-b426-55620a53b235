@@ -223,6 +223,27 @@ table.matrix { border-collapse: collapse; width: 100%; min-width: 500px; }
 .settings-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
 .settings-actions { display: flex; align-items: end; gap: 12px; }
 
+/* ---------------- 方案沙盒 ---------------- */
+.sandbox-divider { border-top: 1px dashed var(--line); margin: 16px 0 12px; }
+.sandbox h3 { margin: 0 0 6px; }
+.sandbox .settings-grid { margin-top: 10px; }
+.sandbox-card {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; background: #fbfcff;
+}
+.sandbox-card.stale { border-color: #f0c0c0; background: #fffafa; }
+.sandbox-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+table.sandbox-metrics { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+.sandbox-metrics th, .sandbox-metrics td { border-bottom: 1px dashed var(--line); padding: 5px 8px; text-align: left; }
+.sandbox-metrics th { color: var(--muted); font-weight: 600; }
+.delta-good { color: var(--green); font-weight: 700; }
+.delta-bad { color: var(--red); font-weight: 700; }
+.sandbox-diff { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.sandbox-diff .reviewer-chips { margin-top: 5px; }
+.chip.added { background: var(--green-soft); border-color: #bfe6d1; color: #115c39; }
+.chip.removed { background: var(--red-soft); border-color: #f0c0c0; color: #7c2222; text-decoration: line-through; }
+.sandbox-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
 /* ---------------- 弹窗 / Toast ---------------- */
 .modal { position: fixed; inset: 0; background: rgba(20,28,48,.4); display: flex;
   align-items: center; justify-content: center; z-index: 50; }

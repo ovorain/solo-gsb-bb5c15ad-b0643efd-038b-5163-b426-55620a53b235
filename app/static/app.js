@@ -17,7 +17,9 @@ async function api(path, options = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || `请求失败（${res.status}）`);
+    const err = new Error(data.detail || `请求失败（${res.status}）`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -433,6 +435,81 @@ function renderSettings() {
   $("#set-inst-cap").value = state.settings.institution_cap ?? 0;
 }
 
+/* --------------------------------------------------------------- 方案沙盒 */
+let sandboxPreview = null;  // 最近一次预览响应（含版本指纹与差异）
+let sandboxStale = false;   // 采用时返回 409：预览已过期，需重新生成
+
+const SB_INPUTS = { "#sb-beta": "mismatch_weight", "#sb-alpha": "load_weight", "#sb-inst-cap": "institution_cap" };
+
+function renderSandbox() {
+  // 临时参数输入框：未被手动修改过时跟随当前设置
+  for (const [sel, key] of Object.entries(SB_INPUTS)) {
+    const el = $(sel);
+    if (el && !el.dataset.touched) el.value = state.settings[key] ?? 0;
+  }
+  const box = $("#sandbox-result");
+  if (!sandboxPreview) {
+    box.innerHTML = "";
+    return;
+  }
+  const p = sandboxPreview;
+  const d = p.diff;
+  const metricRow = (label, m) => {
+    let deltaHtml = '<span class="hint">—</span>';
+    if (m.delta !== null && m.delta !== undefined) {
+      // 四项指标均为越小越好：下降为绿色、上升为红色
+      const cls = m.delta === 0 ? "" : (m.delta < 0 ? "delta-good" : "delta-bad");
+      deltaHtml = `<span class="${cls}">${m.delta > 0 ? "+" : ""}${m.delta}</span>`;
+    }
+    return `<tr><td>${label}</td>
+      <td>${m.current === null ? '<span class="hint">—</span>' : m.current}</td>
+      <td><strong>${m.preview}</strong></td><td>${deltaHtml}</td></tr>`;
+  };
+  const pairChips = (pairs, cls, icon) => pairs.length
+    ? pairs.map((x) => `<span class="chip ${cls}">${icon} 《${esc(x.manuscript_title)}》— ${esc(x.reviewer_name)}${x.is_lead ? " ⭐主审" : ""}</span>`).join("")
+    : '<span class="hint">无变化</span>';
+  box.innerHTML = `<div class="sandbox-card ${sandboxStale ? "stale" : ""}">
+    <div class="sandbox-head">
+      <strong>预览方案</strong>
+      <span class="hint">β=${p.params.mismatch_weight} · α=${p.params.load_weight} · 机构上限=${p.params.institution_cap}
+        · 指纹 ${esc(p.fingerprint.slice(0, 12))}… · 生成于 ${esc(p.created_at)}</span>
+    </div>
+    ${sandboxStale
+      ? `<div class="alert danger">⚠️ 该预览已过期：生成后稿件、评审人、冲突、锁定或参数已被修改，未写入任何内容。请调整临时参数后重新「生成预览」。</div>`
+      : ""}
+    <table class="sandbox-metrics">
+      <tr><th>指标</th><th>当前方案</th><th>预览方案</th><th>变化</th></tr>
+      ${metricRow("目标函数总费用", d.total_cost)}
+      ${metricRow("未满足人数（总缺口）", d.unmet_people)}
+      ${metricRow("未满足稿件数", d.unmet_manuscripts)}
+      ${metricRow("主审缺口", d.lead_deficit)}
+    </table>
+    <div class="sandbox-diff">
+      <div><strong>新增评审配对（${d.added_pairs.length}）</strong>
+        <div class="reviewer-chips">${pairChips(d.added_pairs, "added", "＋")}</div></div>
+      <div><strong>移除评审配对（${d.removed_pairs.length}）</strong>
+        <div class="reviewer-chips">${pairChips(d.removed_pairs, "removed", "－")}</div></div>
+    </div>
+    ${p.solution.warnings.length
+      ? `<div class="alert warn"><strong>⚠️ 预览求解警告（${p.solution.warnings.length}）</strong><ul>${p.solution.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul></div>`
+      : ""}
+    ${p.solution.unmet.length
+      ? `<div class="alert danger"><strong>⛔ 预览仍有 ${p.solution.unmet.length} 篇未满足：</strong>${p.solution.unmet.map((u) => `《${esc(u.title)}》（缺 ${u.deficit} 人${u.lead_deficit ? `、主审缺 ${u.lead_deficit}` : ""}）`).join("、")}</div>`
+      : `<div class="alert success">✅ 预览方案满足全部 ${p.solution.total_required} 个评审需求。</div>`}
+    <div class="sandbox-actions">
+      <button id="btn-sandbox-apply" class="btn primary" ${sandboxStale ? "disabled" : ""}>✅ 采用该方案（写入临时参数与预览分配）</button>
+      <button id="btn-sandbox-discard" class="btn ghost">丢弃预览</button>
+    </div>
+  </div>`;
+}
+
+function clearSandboxInputsTouched() {
+  for (const sel of Object.keys(SB_INPUTS)) {
+    const el = $(sel);
+    if (el) delete el.dataset.touched;
+  }
+}
+
 function render() {
   indexMaps();
   renderSummary();
@@ -444,6 +521,7 @@ function render() {
   renderConflicts();
   renderDeclarations();
   renderSettings();
+  renderSandbox();
 }
 
 /* --------------------------------------------------------------- 通用编辑弹窗 */
@@ -681,6 +759,67 @@ function bindEvents() {
       }),
     }), "设置已保存（点击“重新求解分配”可按新权重/机构上限计算）");
   });
+
+  // 方案沙盒：生成预览（不改动任何设置/分配/锁定/上次解）
+  $("#btn-sandbox-preview").addEventListener("click", async () => {
+    const btn = $("#btn-sandbox-preview");
+    btn.disabled = true;
+    try {
+      sandboxPreview = await api("/api/sandbox/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          mismatch_weight: Number($("#sb-beta").value),
+          load_weight: Number($("#sb-alpha").value),
+          institution_cap: Number($("#sb-inst-cap").value),
+        }),
+      });
+      sandboxStale = false;
+      renderSandbox();
+      toast("预览已生成（未改动任何设置与分配）");
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 方案沙盒：采用 / 丢弃（按钮在预览卡片内，事件委托）
+  $("#sandbox-result").addEventListener("click", async (e) => {
+    if (e.target.closest("#btn-sandbox-apply")) {
+      if (!sandboxPreview || sandboxStale) return;
+      if (!confirm("采用该预览方案？将在单个事务内写入临时参数与预览分配；若数据已被并发修改将拒绝写入。")) return;
+      try {
+        const data = await api("/api/sandbox/apply", {
+          method: "POST",
+          body: JSON.stringify({ ...sandboxPreview.params, fingerprint: sandboxPreview.fingerprint }),
+        });
+        state = data;
+        sandboxPreview = null;
+        sandboxStale = false;
+        clearSandboxInputsTouched(); // 采用后临时参数输入跟随新设置
+        render();
+        toast("已采用预览方案：临时参数与预览分配已写入");
+      } catch (err) {
+        if (err.status === 409) {
+          // 指纹已变化：标记过期并提示重新预览，绝不覆盖并发修改
+          sandboxStale = true;
+          renderSandbox();
+        }
+        toast(err.message, true);
+      }
+    } else if (e.target.closest("#btn-sandbox-discard")) {
+      sandboxPreview = null;
+      sandboxStale = false;
+      renderSandbox();
+      toast("已丢弃预览");
+    }
+  });
+
+  // 临时参数输入框：记录手动修改，避免被设置回显覆盖
+  for (const sel of Object.keys(SB_INPUTS)) {
+    const el = $(sel);
+    if (el) el.addEventListener("input", () => (el.dataset.touched = "1"));
+  }
 
   // 申报链接弹窗：关闭 / 复制（明文链接仅此一次展示）
   $("#link-modal-close").addEventListener("click", closeLinkModal);

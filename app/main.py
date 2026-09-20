@@ -18,6 +18,8 @@ from . import db
 from .db import get_conn, get_setting, normalize_institution, normalize_topics, seed_demo_data, set_setting, transaction
 from .declarations import DeclarationError
 from . import declarations as decl_svc
+from .sandbox import SandboxError
+from . import sandbox as sandbox_svc
 from .schemas import (
     ConflictIn,
     DeclarationSubmitIn,
@@ -26,6 +28,8 @@ from .schemas import (
     ManuscriptPatch,
     ReviewerIn,
     ReviewerPatch,
+    SandboxApplyIn,
+    SandboxPreviewIn,
     SettingsIn,
 )
 from .solver import institution_lock_exceeds, solve
@@ -46,6 +50,11 @@ app = FastAPI(title="匿名评审分配系统", lifespan=lifespan)
 @app.exception_handler(DeclarationError)
 def declaration_error_handler(request: Request, exc: DeclarationError):
     # 错误消息只含申报记录 ID / 稿件标题，绝不回传令牌或其哈希
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
+@app.exception_handler(SandboxError)
+def sandbox_error_handler(request: Request, exc: SandboxError):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
@@ -334,6 +343,27 @@ def update_settings(body: SettingsIn, conn=Depends(get_conn)):
 @app.post("/api/solve")
 def api_solve(conn=Depends(get_conn)):
     solution = solve(conn)
+    return build_state(conn) | {"solution": solution}
+
+
+# ----------------------------------------------------------------- 方案沙盒
+@app.post("/api/sandbox/preview")
+def sandbox_preview(body: SandboxPreviewIn, conn=Depends(get_conn)):
+    """用临时参数生成预览：不写入 settings / assignments / 锁定 / last_solution。
+
+    返回与当前方案的差异（新增/移除配对、总成本、未满足人数、主审缺口）
+    以及绑定稿件/评审人/冲突/锁定与参数的版本指纹。
+    """
+    return sandbox_svc.preview(
+        conn, body.mismatch_weight, body.load_weight, body.institution_cap)
+
+
+@app.post("/api/sandbox/apply")
+def sandbox_apply(body: SandboxApplyIn, conn=Depends(get_conn)):
+    """采用预览：指纹仍一致时在单个事务内写入临时参数与预览分配，否则 409。"""
+    solution = sandbox_svc.apply(
+        conn, body.mismatch_weight, body.load_weight, body.institution_cap,
+        body.fingerprint)
     return build_state(conn) | {"solution": solution}
 
 

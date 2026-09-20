@@ -64,6 +64,19 @@ class DeclarationSubmitIn(BaseModel):
     conflict_manuscript_ids: List[int] = Field(default_factory=list, max_length=1000)
 
 
+class SandboxPreviewIn(BaseModel):
+    """方案沙盒预览：临时求解参数（不写入设置）。"""
+    mismatch_weight: int = Field(ge=0, le=100000)
+    load_weight: int = Field(ge=0, le=100000)
+    # 每篇稿件同机构最多人数；0 表示关闭机构多样性约束
+    institution_cap: int = Field(ge=0, le=20)
+
+
+class SandboxApplyIn(SandboxPreviewIn):
+    """方案沙盒采用：临时参数 + 预览时返回的版本指纹（不一致则 409）。"""
+    fingerprint: str = Field(min_length=1, max_length=128)
+
+
 class TopicsIn(BaseModel):
     """仅用于前端校验的占位模型（当前未使用，保留扩展）。"""
 
