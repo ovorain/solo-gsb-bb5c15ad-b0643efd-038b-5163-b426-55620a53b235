@@ -59,6 +59,19 @@ class LockIn(BaseModel):
     locked: bool
 
 
+class SandboxPreviewIn(BaseModel):
+    """方案沙盒预览：三项临时求解参数（仅用于内存重算，不写入设置）。"""
+    mismatch_weight: int = Field(ge=0, le=100000)
+    load_weight: int = Field(ge=0, le=100000)
+    # 每篇稿件同机构最多人数；0 表示关闭机构多样性约束
+    institution_cap: int = Field(ge=0, le=20)
+
+
+class SandboxAdoptIn(SandboxPreviewIn):
+    """采用沙盒方案：附带预览时绑定的版本指纹（不一致返回 409）。"""
+    fingerprint: str = Field(min_length=1, max_length=128)
+
+
 class DeclarationSubmitIn(BaseModel):
     """评审人一次性申报提交体：勾选存在冲突的稿件 ID 列表（空列表=无冲突）。"""
     conflict_manuscript_ids: List[int] = Field(default_factory=list, max_length=1000)

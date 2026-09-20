@@ -74,6 +74,33 @@
             <span class="hint">权重修改后请点击“重新求解分配”生效。</span>
           </div>
         </div>
+
+        <div class="sandbox-box">
+          <h3>🧪 方案沙盒</h3>
+          <p class="hint">
+            输入<strong>临时</strong>参数并「生成预览」：仅在内存中重算，<strong>不改动</strong>当前设置、分配、锁定与上次求解结果。
+            预览展示与当前方案相比的新增/移除评审配对、总成本、未满足人数与主审缺口变化，并绑定数据版本指纹。
+            「采用该方案」仅在指纹仍一致时于<strong>单个事务</strong>内写入临时参数与预览分配；
+            若预览期间数据已被修改，采用将返回 409，需重新生成预览。
+          </p>
+          <div class="settings-grid">
+            <label>临时主题不匹配权重 β
+              <input type="number" id="sb-beta" min="0" max="100000" />
+            </label>
+            <label>临时负载偏差权重 α
+              <input type="number" id="sb-alpha" min="0" max="100000" />
+            </label>
+            <label>临时每篇同机构最多人数（0 关闭）
+              <input type="number" id="sb-inst-cap" min="0" max="20" />
+            </label>
+            <div class="settings-actions">
+              <button id="btn-sandbox-preview" class="btn">🧪 生成预览</button>
+              <button id="btn-sandbox-adopt" class="btn primary" disabled>✅ 采用该方案</button>
+              <button id="btn-sandbox-clear" class="btn ghost" disabled>清除预览</button>
+            </div>
+          </div>
+          <div id="sandbox-result"></div>
+        </div>
       </details>
     </section>
 

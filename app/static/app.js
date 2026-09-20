@@ -431,6 +431,108 @@ function renderSettings() {
   $("#set-beta").value = state.settings.mismatch_weight;
   $("#set-alpha").value = state.settings.load_weight;
   $("#set-inst-cap").value = state.settings.institution_cap ?? 0;
+  // 沙盒临时参数：用户未手动改过（或采用后重置）时跟随当前设置
+  const sbDefaults = {
+    "#sb-beta": state.settings.mismatch_weight,
+    "#sb-alpha": state.settings.load_weight,
+    "#sb-inst-cap": state.settings.institution_cap ?? 0,
+  };
+  for (const [sel, val] of Object.entries(sbDefaults)) {
+    const el = $(sel);
+    if (el && !el.dataset.touched) el.value = val;
+  }
+}
+
+/* --------------------------------------------------------------- 方案沙盒 */
+let sandboxPreview = null;
+
+function deltaCell(value, goodWhenNegative = true) {
+  if (value === null || value === undefined) return '<span class="delta-same">—</span>';
+  if (value === 0) return '<span class="delta-same">±0</span>';
+  const better = goodWhenNegative ? value < 0 : value > 0;
+  const sign = value > 0 ? `+${value}` : `${value}`;
+  return `<span class="${better ? "delta-down" : "delta-up"}">${sign}（${better ? "更优" : "更差"}）</span>`;
+}
+
+function renderSandbox() {
+  const box = $("#sandbox-result");
+  const adoptBtn = $("#btn-sandbox-adopt");
+  const clearBtn = $("#btn-sandbox-clear");
+  if (!sandboxPreview) {
+    box.innerHTML = "";
+    adoptBtn.disabled = true;
+    clearBtn.disabled = true;
+    return;
+  }
+  const p = sandboxPreview;
+  adoptBtn.disabled = !!p._stale;
+  clearBtn.disabled = false;
+
+  const cur = p.current_metrics;
+  const rows = [
+    ["目标函数总费用", cur ? cur.total_cost : "—", p.metrics.total_cost,
+      p.delta ? deltaCell(p.delta.total_cost) : '<span class="delta-same">—</span>'],
+    ["已满足评审数", cur ? `${cur.total_assigned} / ${cur.total_required}` : "—",
+      `${p.metrics.total_assigned} / ${p.metrics.total_required}`,
+      p.delta ? deltaCell(p.delta.total_assigned, false) : '<span class="delta-same">—</span>'],
+    ["未满足人数", cur ? cur.unmet_people : "—", p.metrics.unmet_people,
+      p.delta ? deltaCell(p.delta.unmet_people) : '<span class="delta-same">—</span>'],
+    ["主审缺口", cur ? cur.lead_deficit : "—", p.metrics.lead_deficit,
+      p.delta ? deltaCell(p.delta.lead_deficit) : '<span class="delta-same">—</span>'],
+  ].map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("");
+
+  const pairLine = (x, sign) =>
+    `<li>${sign} 《${esc(x.manuscript_title)}》 ← ${esc(x.reviewer_name)}` +
+    (x.is_lead ? ' <span class="tag lead-tag">⭐ 主审</span>' : "") + `</li>`;
+  const diffList = (items, sign, emptyText) =>
+    items.length ? `<ul>${items.map((x) => pairLine(x, sign)).join("")}</ul>`
+                 : `<div class="hint">${emptyText}</div>`;
+
+  const unmetHtml = p.unmet.length
+    ? `<div class="sandbox-unmet"><strong>预览中仍有 ${p.unmet.length} 篇未满足：</strong><ul>` +
+      p.unmet.map((u) =>
+        `<li>《${esc(u.title)}》：缺评审 ${u.deficit} 名` +
+        (u.lead_deficit > 0 ? `，主审缺口 ${u.lead_deficit} 名` : "") + `</li>`).join("") +
+      `</ul></div>`
+    : `<div class="sandbox-unmet ok">✅ 预览方案可满足全部评审需求（含主审）。</div>`;
+
+  const staleHtml = p._stale
+    ? `<div class="alert danger" style="margin-top:10px">⚠️ 采用失败：预览生成后数据已被修改，
+       该预览已过期（服务端返回 409，未写入任何内容）。请「清除预览」后重新「生成预览」。</div>`
+    : "";
+
+  box.innerHTML = `<div class="sandbox-result-inner ${p._stale ? "stale" : ""}">
+    ${staleHtml}
+    <div class="sandbox-meta">
+      临时参数：β=${p.params.mismatch_weight} · α=${p.params.load_weight} · 机构上限=${p.params.institution_cap}
+      （当前设置：β=${p.current_params.mismatch_weight} · α=${p.current_params.load_weight} · 机构上限=${p.current_params.institution_cap}）
+      ｜ 生成于 ${esc(p.created_at)} ｜ 版本指纹 <code>${esc(p.fingerprint.slice(0, 12))}…</code>
+      ${cur ? "" : "｜ 当前尚无求解结果，仅展示预览指标"}
+    </div>
+    <table class="sandbox-metrics">
+      <tr><th>指标</th><th>当前方案</th><th>沙盒预览</th><th>变化</th></tr>
+      ${rows}
+    </table>
+    <div class="sandbox-diff">
+      <div>
+        <h4>➕ 新增评审配对（${p.diff.added.length}）</h4>
+        ${diffList(p.diff.added, "➕", "无新增配对")}
+      </div>
+      <div>
+        <h4>➖ 移除评审配对（${p.diff.removed.length}）</h4>
+        ${diffList(p.diff.removed, "➖", "无移除配对")}
+      </div>
+    </div>
+    ${unmetHtml}
+    <div class="sandbox-meta">采用后：临时参数写入设置，预览分配替换当前全部非锁定分配（锁定保留），并更新求解结果。</div>
+  </div>`;
+}
+
+function clearSandboxTouched() {
+  for (const sel of ["#sb-beta", "#sb-alpha", "#sb-inst-cap"]) {
+    const el = $(sel);
+    if (el) delete el.dataset.touched;
+  }
 }
 
 function render() {
@@ -444,6 +546,7 @@ function render() {
   renderConflicts();
   renderDeclarations();
   renderSettings();
+  renderSandbox();
 }
 
 /* --------------------------------------------------------------- 通用编辑弹窗 */
@@ -681,6 +784,69 @@ function bindEvents() {
       }),
     }), "设置已保存（点击“重新求解分配”可按新权重/机构上限计算）");
   });
+
+  // 方案沙盒：生成预览（不改动任何数据）
+  $("#btn-sandbox-preview").addEventListener("click", async () => {
+    const btn = $("#btn-sandbox-preview");
+    btn.disabled = true;
+    try {
+      sandboxPreview = await api("/api/sandbox/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          mismatch_weight: Number($("#sb-beta").value),
+          load_weight: Number($("#sb-alpha").value),
+          institution_cap: Number($("#sb-inst-cap").value),
+        }),
+      });
+      renderSandbox();
+      toast("已生成沙盒预览（未改动设置与分配）");
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 方案沙盒：采用（指纹一致时单事务写入；409 则提示重新预览）
+  $("#btn-sandbox-adopt").addEventListener("click", async () => {
+    if (!sandboxPreview) return;
+    if (!confirm("将采用临时参数，并以预览分配替换当前全部非锁定分配（锁定保留），是否继续？")) return;
+    const btn = $("#btn-sandbox-adopt");
+    btn.disabled = true;
+    try {
+      const data = await api("/api/sandbox/adopt", {
+        method: "POST",
+        body: JSON.stringify({
+          ...sandboxPreview.params,
+          fingerprint: sandboxPreview.fingerprint,
+        }),
+      });
+      state = data;
+      sandboxPreview = null;
+      clearSandboxTouched();
+      render();
+      toast("已采用沙盒方案：临时参数与预览分配已写入");
+    } catch (e) {
+      // 409：预览已过期，标记并禁用采用，引导重新预览
+      if (sandboxPreview) {
+        sandboxPreview._stale = true;
+        renderSandbox();
+      }
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 方案沙盒：清除预览
+  $("#btn-sandbox-clear").addEventListener("click", () => {
+    sandboxPreview = null;
+    renderSandbox();
+  });
+
+  // 沙盒输入框手动编辑后不再跟随设置自动填充
+  $$("#sb-beta, #sb-alpha, #sb-inst-cap").forEach((i) =>
+    i.addEventListener("input", () => (i.dataset.touched = "1")));
 
   // 申报链接弹窗：关闭 / 复制（明文链接仅此一次展示）
   $("#link-modal-close").addEventListener("click", closeLinkModal);
